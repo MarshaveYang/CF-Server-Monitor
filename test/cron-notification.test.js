@@ -507,3 +507,23 @@ test('compact resource responses are smaller and keep the legacy protocol availa
   assert.deepEqual(compact.results[0].metricDefinitions, [{ metric: 'cpu', mode: 'average', threshold: 80 }]);
   assert.deepEqual(compact.results[0].evaluations[0].metrics, [[30, 50, 10, 50, 30]]);
 });
+
+test('hourly tasks ride on the minute cron at :00 and yield the offline check', async t => {
+  setup(t);
+  // 整点那一分钟：原本独立的 "0 * * * *" 任务由每分钟 cron 承担，
+  // 离线/告警让位，避免叠进同一个 Cron 的 10ms CPU 预算。
+  t.mock.timers.setTime(Date.UTC(2026, 9, 22, 12, 0));
+  clearAllCaches();
+  const db = makeDb(makeSettings());
+  const { env } = makeEnv(db);
+  await worker.scheduled({ cron: '*/1 * * * *' }, env, {});
+  assert.equal(db.stats.offline, 0, 'offline check must yield at :00');
+  assert.equal(db.stats.resource, 0, 'resource alerts must yield at :00');
+  assert.ok(db.stats.settings >= 1, 'expire check still reads settings');
+
+  // 下一分钟恢复正常检测
+  t.mock.timers.setTime(Date.UTC(2026, 9, 22, 12, 1));
+  const before = db.stats.offline;
+  await worker.scheduled({ cron: '*/1 * * * *' }, env, {});
+  assert.ok(db.stats.offline > before, 'offline check resumes at :01');
+});

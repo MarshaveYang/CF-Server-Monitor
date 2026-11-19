@@ -474,6 +474,20 @@ export default {
     const minute = now.getUTCMinutes();
     
     if (cron === '*/1 * * * *') {
+      // 整点这一分钟专做原本每小时的任务（表轮换、到期检测），不与离线/告警挤在
+      // 同一个 Cron 请求里 —— 免费版每次 Cron 只有 10ms CPU 预算，叠一起容易撞线。
+      // 代价是离线检测在整点那一分钟让位，延后 1 分钟，不影响判定。
+      if (minute === 0) {
+        if (day === 0 && hour === 0) {
+          debug('[Cron] 开始执行每周数据清理任务（表轮换）');
+          await weeklyCleanup(env.DB);
+          debug('[Cron] 每周数据清理任务完成');
+        }
+        debug('[Cron] 检查是否到达服务器到期检测时间');
+        await checkExpiringServers(env.DB, { scheduled: true, now: now.getTime() });
+        return;
+      }
+
       if (day === 0 && hour === 0 && minute < 5) {
         debug('[Cron] 每周日0:00-0:05表轮换期间，跳过离线节点检测');
       } else {
@@ -488,14 +502,6 @@ export default {
         await checkResourceAlerts(env, { siteSettings });
         debug('[Cron] 资源负载告警检测完成');
       }
-    } else if (cron === '0 * * * *') {
-      if (day === 0 && hour === 0) {
-        debug('[Cron] 开始执行每周数据清理任务（表轮换）');
-        await weeklyCleanup(env.DB);
-        debug('[Cron] 每周数据清理任务完成');
-      }
-      debug('[Cron] 检查是否到达服务器到期检测时间');
-      await checkExpiringServers(env.DB, { scheduled: true, now: now.getTime() });
     }else if(env.DEBUG == 1){
       if (cron === '0 0 * * 0') {
         debug('[Cron DEBUG] 开始执行每周数据清理任务（表轮换）');
